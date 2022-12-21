@@ -39,10 +39,10 @@ pub fn blowfish_nds(v: &mut u64, kbuf: &[u32], enc: bool) {
 
     for i in iter {
         z = kbuf[i] ^ x; // P-array XOR
-        x = kbuf[(0x12  + ((z >> 24) & 0xFF)) as usize];     // S-box[0]
-        x = kbuf[(0x112 + ((z >> 16) & 0xFF)) as usize] + x; // S-box[1]
-        x = kbuf[(0x212 + ((z >> 8)  & 0xFF)) as usize] ^ x; // S-box[2]
-        x = kbuf[(0x312 + ((z >> 0)  & 0xFF)) as usize] + x; // S-box[3]
+        x = kbuf[(0x12  + ((z >> 24) & 0xFF)) as usize];                 // S-box[0]
+        x = kbuf[(0x112 + ((z >> 16) & 0xFF)) as usize].wrapping_add(x); // S-box[1]
+        x = kbuf[(0x212 + ((z >> 8)  & 0xFF)) as usize] ^ x;             // S-box[2]
+        x = kbuf[(0x312 + ((z >> 0)  & 0xFF)) as usize].wrapping_add(x); // S-box[3]
         x = y ^ x;
         y = z;
     }
@@ -74,11 +74,11 @@ pub fn apply_keycode(tk: &mut [u32; 3], kbuf: &mut [u32]) {
     }
 }
 
-pub fn load_encr_data<R: Read + Seek>(encr_data: &mut R) -> Result<[u32; 262], &'static str> {
+pub fn load_encr_data<R: Read + Seek>(encr_data: &mut R) -> Result<[u32; 1042], &'static str> {
     // let data_len = encr_data.seek(SeekFrom::End(0)).map_err(|_| { "Seek failed on encryption binary." })?;
     encr_data.seek(SeekFrom::Start(0)).map_err(|_| { "Seek failed on encryption binary." })?;
     
-    let mut contents: [u32; 262] = [0; 262];
+    let mut contents: [u32; 1042] = [0; 1042];
     for i in &mut contents {
         *i = encr_data.read_u32::<LittleEndian>().unwrap();
     }
