@@ -1,24 +1,34 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::fs::File;
 use std::default::Default;
-use std::mem::transmute;
+use std::mem::{transmute, size_of};
 
 use byteorder::{ReadBytesExt, LittleEndian};
 
 #[derive(Default)]
+#[repr(C, packed(1))]
 pub struct NDSCartridgeHeader {
-    gametitle: [u8; 12],
-    gamecode:  [u8;  4],
+    gametitle:   [u8; 12],
+    gamecode:         u32,
+    makercode:        u16,
+    unitcode:    [u8;  1],
+    encrseedsel: [u8;  1],
+    devicecaps:  [u8;  1],
+    res0:        [u8;  8],
+    ndsregion:   [u8;  1],
+    romversion:  [u8;  1],
+    autostart:   [u8;  1],
+    arm9off:          u32,
 }
 
 impl NDSCartridgeHeader {
     
     pub fn parse_nds<R: Read + Seek>(mut cart: R) -> Self {
         let mut hdr = Self::default();
+        let hdrptr = unsafe { transmute::<&mut NDSCartridgeHeader, &mut [u8; size_of::<NDSCartridgeHeader>()]>(&mut hdr) };
 
         cart.seek(SeekFrom::Start(0)).unwrap();
-        cart.read_exact(&mut hdr.gametitle).expect("Could not read gametitle");
-        cart.read_exact(&mut hdr.gamecode).expect("Could not read gamecode");
+        cart.read_exact(hdrptr).unwrap();
 
         hdr
     }
@@ -86,6 +96,20 @@ pub fn load_encr_data<R: Read + Seek>(encr_data: &mut R) -> Result<[u32; 1042], 
     Ok(contents)
 }
 
+pub fn load_secure_area<R: Read + Seek>(ndsfile: &mut R, addr: u64) -> Result<[u64; 32], &'static str> {
+    // For now, assume arm9 boot address is exactly 0x4000. In reality, for secure area to be used, src
+    // can be up to 0x7FFF.
+    assert!(addr == 0x4000);
+    ndsfile.seek(SeekFrom::Start(addr)).map_err(|_| { "Seek failed on nds file." })?;
+
+    let mut contents: [u64; 32] = [0; 32];
+    for i in &mut contents {
+        *i = ndsfile.read_u64::<LittleEndian>().unwrap();
+    }
+    
+    Ok(contents)
+}
+
 fn main() {
     let mut ndsfile = File::open("pokemon.nds").unwrap();
     let mut encr_data = File::open("encr_data.bin").unwrap();
@@ -94,16 +118,26 @@ fn main() {
 
     let ndshdr = NDSCartridgeHeader::parse_nds(&mut ndsfile);
     let titlestr: String = String::from_utf8_lossy(&ndshdr.gametitle).into_owned();
-    let titlecode4: u32 = u32::from_le_bytes(ndshdr.gamecode);
+
+    let mut arm9secarea = load_secure_area(&mut ndsfile, ndshdr.arm9off as u64).unwrap();
 
     let mut keycode: [u32; 3] = [
-        titlecode4,
-        titlecode4 >> 1,
-        titlecode4 << 1,
+        ndshdr.gamecode,
+        ndshdr.gamecode >> 1,
+        ndshdr.gamecode << 1,
     ];
 
     apply_keycode(&mut keycode, &mut encr);
+    apply_keycode(&mut keycode, &mut encr);
+    blowfish_nds(&mut arm9secarea[0], &encr, true);
+    blowfish_nds(&mut arm9secarea[0], &encr, false);
+    println!("{:#06x}", arm9secarea[0]);
+
+    // Local variables needed to store unaligned fields (from packed header)
+    let gamecode = ndshdr.gamecode;
+    let arm9off = ndshdr.arm9off;
 
     println!("Game title: {}", titlestr);
-    println!("Game code: {:#06x}", titlecode4);
+    println!("Game code: {:#06x}", gamecode);
+    println!("ARM9 bootcode ROM offset: {:#06x}", arm9off);
 }
