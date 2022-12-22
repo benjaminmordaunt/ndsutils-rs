@@ -27,7 +27,7 @@ impl ARM9Bootcode {
             contents.push(nds.read_u64::<LittleEndian>().unwrap());
         }
 
-        let secure_area_encrypted = !(contents[0] == 0xE7FFDEFF && contents[1] == 0xE7FFDEFF);
+        let secure_area_encrypted = contents[0] != 0xE7FFDEFFE7FFDEFF;
 
         ARM9Bootcode { 
             raw_data: contents, 
