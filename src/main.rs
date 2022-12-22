@@ -5,6 +5,38 @@ use std::mem::{transmute, size_of};
 
 use byteorder::{ReadBytesExt, LittleEndian};
 
+// Represents the contents of the ARM9 bootcode, as well as
+// information about its secure area.
+struct ARM9Bootcode {
+    raw_data: Vec<u64>,
+    secure_area_present: bool, // Determined by start address (4000h..8000h)
+    secure_area_encrypted: bool,
+}
+
+impl ARM9Bootcode {
+    fn new<R: Read + Seek>(nds: &mut R, hdr: &NDSCartridgeHeader) -> ARM9Bootcode {
+        // For now, assume arm9 boot address is exactly 0x4000. In reality, for secure area to be used, src
+        // can be up to 0x7FFF.
+        let arm9off: u64 = hdr.arm9off as u64;
+
+        assert!(hdr.arm9off == 0x4000);
+        nds.seek(SeekFrom::Start(arm9off)).map_err(|_| { "Seek failed on nds file." }).unwrap();
+
+        let mut contents: Vec<u64> = vec![];
+        for _ in 0..hdr.arm9size {
+            contents.push(nds.read_u64::<LittleEndian>().unwrap());
+        }
+
+        let secure_area_encrypted = !(contents[0] == 0xE7FFDEFF && contents[1] == 0xE7FFDEFF);
+
+        ARM9Bootcode { 
+            raw_data: contents, 
+            secure_area_present: hdr.arm9off >= 0x4000 && hdr.arm9off < 0x8000, 
+            secure_area_encrypted
+        }
+    }
+}
+
 #[derive(Default)]
 #[repr(C, packed(1))]
 pub struct NDSCartridgeHeader {
@@ -19,6 +51,9 @@ pub struct NDSCartridgeHeader {
     romversion:  [u8;  1],
     autostart:   [u8;  1],
     arm9off:          u32,
+    arm9entry:        u32,
+    arm9raddr:        u32,
+    arm9size:         u32,
 }
 
 impl NDSCartridgeHeader {
@@ -38,7 +73,6 @@ pub fn blowfish_nds(v: &mut u64, kbuf: &[u32], enc: bool) {
     let mut x: u32 = *v as u32;
     let mut y: u32 = (*v >> 32) as u32;
     let mut z: u32;
-    let koff: usize = if enc { 0x10 } else { 0x00 };
 
     let iter: Box<dyn Iterator<Item = usize>> =
         if enc {
@@ -58,7 +92,14 @@ pub fn blowfish_nds(v: &mut u64, kbuf: &[u32], enc: bool) {
     }
 
     // Swap + P-array[16,17] XOR
-    *v = ((y ^ kbuf[koff]) as u64) | (((x ^ kbuf[1 + koff]) as u64) << 32);
+    if enc {
+        y ^= kbuf[16];
+        x ^= kbuf[17];
+    } else {
+        y ^= kbuf[1];
+        x ^= kbuf[0];
+    }
+    *v = (y as u64) | ((x as u64) << 32);
 }
 
 /* Applies a series of arbitrary manipulations on the P-array and S-boxes 
@@ -96,20 +137,6 @@ pub fn load_encr_data<R: Read + Seek>(encr_data: &mut R) -> Result<[u32; 1042], 
     Ok(contents)
 }
 
-pub fn load_secure_area<R: Read + Seek>(ndsfile: &mut R, addr: u64) -> Result<[u64; 32], &'static str> {
-    // For now, assume arm9 boot address is exactly 0x4000. In reality, for secure area to be used, src
-    // can be up to 0x7FFF.
-    assert!(addr == 0x4000);
-    ndsfile.seek(SeekFrom::Start(addr)).map_err(|_| { "Seek failed on nds file." })?;
-
-    let mut contents: [u64; 32] = [0; 32];
-    for i in &mut contents {
-        *i = ndsfile.read_u64::<LittleEndian>().unwrap();
-    }
-    
-    Ok(contents)
-}
-
 fn main() {
     let mut ndsfile = File::open("pokemon.nds").unwrap();
     let mut encr_data = File::open("encr_data.bin").unwrap();
@@ -119,7 +146,7 @@ fn main() {
     let ndshdr = NDSCartridgeHeader::parse_nds(&mut ndsfile);
     let titlestr: String = String::from_utf8_lossy(&ndshdr.gametitle).into_owned();
 
-    let mut arm9secarea = load_secure_area(&mut ndsfile, ndshdr.arm9off as u64).unwrap();
+    let mut arm9code = ARM9Bootcode::new(&mut ndsfile, &ndshdr);
 
     let mut keycode: [u32; 3] = [
         ndshdr.gamecode,
@@ -129,9 +156,10 @@ fn main() {
 
     apply_keycode(&mut keycode, &mut encr);
     apply_keycode(&mut keycode, &mut encr);
-    blowfish_nds(&mut arm9secarea[0], &encr, true);
-    blowfish_nds(&mut arm9secarea[0], &encr, false);
-    println!("{:#06x}", arm9secarea[0]);
+    blowfish_nds(&mut arm9code.raw_data[0], &encr, true);
+    apply_keycode(&mut keycode, &mut encr);
+    blowfish_nds(&mut arm9code.raw_data[0], &encr, false);
+    println!("{:#06x}", arm9code.raw_data[0]);
 
     // Local variables needed to store unaligned fields (from packed header)
     let gamecode = ndshdr.gamecode;
@@ -140,4 +168,14 @@ fn main() {
     println!("Game title: {}", titlestr);
     println!("Game code: {:#06x}", gamecode);
     println!("ARM9 bootcode ROM offset: {:#06x}", arm9off);
+
+    if !arm9code.secure_area_present {
+        println!("NOTE: ROM has no ARM9 secure area.");
+    } else {
+        if arm9code.secure_area_encrypted {
+            println!("NOTE: ARM9 secure area requires decryption.");
+        } else {
+            println!("NOTE: ARM9 secure area is already decrypted.");
+        }
+    }
 }
