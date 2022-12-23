@@ -1,5 +1,6 @@
 mod crc;
 
+use colored::Colorize;
 use crc::bios_get_crc16;
 use std::default::Default;
 use std::fs::File;
@@ -146,6 +147,17 @@ pub fn load_encr_data<R: Read + Seek>(encr_data: &mut R) -> Result<[u32; 1042], 
     Ok(contents)
 }
 
+/* Check that the ARM9 secure area CRC16 at [secure_area+0Eh] is correct.
+Either way, return the correct CRC16, assuming the contents of [secure_area+10h..secure_area+800h]
+are actually correct. Note that it is observed that nothing actually ensures this is correct in BIOS/firmware.
+Nonetheless, we should insert it when packing brew'd games. */
+pub fn check_secure_area_crc(crc: &u16, sec_area_slice: &[u8]) -> (bool, u16) {
+    assert!(sec_area_slice.len() == 0x7F0);
+
+    let crc_correct = bios_get_crc16(sec_area_slice);
+    (crc_correct == *crc, crc_correct)
+}
+
 fn main() {
     let mut ndsfile = File::open("pokemon.nds").unwrap();
     let mut encr_data = File::open("encr_data.bin").unwrap();
@@ -182,6 +194,24 @@ fn main() {
             println!("NOTE: ARM9 secure area is already decrypted.");
         }
     }
+
+    // Check whether the CRC16 is correct.
+    // TODO: Struct-ize the secure area header.
+    let arm9u8ref = unsafe { transmute::<&[u64], &[u8]>(&arm9code.raw_data[..]) };
+    let rom_crc = unsafe { transmute::<&u8, &u16>(&arm9u8ref[0xE]) };
+
+    let crc_check_result = check_secure_area_crc(rom_crc, &arm9u8ref[0x10..0x800]);
+
+    println!(
+        "CRC16 from ROM: {:#06x}, actual: {:#06x}... {}",
+        rom_crc,
+        crc_check_result.1,
+        if crc_check_result.0 {
+            "OK".green()
+        } else {
+            "BAD".red()
+        }
+    );
 
     // Dump the ARM9 binary
     let mut arm9outbin = File::options()
