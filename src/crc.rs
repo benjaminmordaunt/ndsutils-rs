@@ -2,7 +2,7 @@
 // NDS BIOS CRC function
 // ----------------------
 
-static MODBUSCRC16LUT: [u16] = [
+static MODBUSCRC16LUT: [u16; 256] = [
     0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241, 0xC601, 0x06C0, 0x0780, 0xC741,
     0x0500, 0xC5C1, 0xC481, 0x0440, 0xCC01, 0x0CC0, 0x0D80, 0xCD41, 0x0F00, 0xCFC1, 0xCE81, 0x0E40,
     0x0A00, 0xCAC1, 0xCB81, 0x0B40, 0xC901, 0x09C0, 0x0880, 0xC841, 0xD801, 0x18C0, 0x1980, 0xD941,
@@ -27,12 +27,12 @@ static MODBUSCRC16LUT: [u16] = [
     0x4100, 0x81C1, 0x8081, 0x4040,
 ];
 
-pub fn bios_get_crc16(data: &[u8], len: usize) -> u16 {
+pub fn bios_get_crc16(data: &[u8]) -> u16 {
     let mut crc_out: u16 = 0xFFFF;
-    let mut temp: u16;
+    let mut temp: u8;
 
-    for i in 0..len {
-        temp = data[i] ^ crc_out;
+    for b in data {
+        temp = b ^ crc_out as u8;
         crc_out >>= 8;
         crc_out ^= MODBUSCRC16LUT[temp as usize];
     }
